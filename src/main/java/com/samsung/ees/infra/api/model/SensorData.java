@@ -15,6 +15,6 @@ import java.time.LocalDateTime;
 public class SensorData {
     private LocalDateTime startTime;
     private LocalDateTime endTime;
-    private Long sensorId;
-    private byte[] blobData; // GZIP compressed JSON data
+    private Long parameterIndex; // sensorId -> parameterIndex
+    private byte[] traceData;    // blobData -> traceData
 }

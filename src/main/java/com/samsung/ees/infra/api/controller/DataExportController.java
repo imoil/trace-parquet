@@ -5,6 +5,7 @@ import com.samsung.ees.infra.api.repository.SensorDataRepository;
 import com.samsung.ees.infra.api.service.ParquetConversionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -35,21 +37,28 @@ public class DataExportController {
     /**
      * API endpoint to fetch sensor data and return it as a Parquet file.
      *
-     * @param sensorIds A comma-separated string of sensor IDs to query.
+     * @param parameterIndices A comma-separated string of parameter indices to query.
+     * @param startTime The start of the time range (ISO 8601 format).
+     * @param endTime   The end of the time range (ISO 8601 format).
      * @return A ResponseEntity containing the Parquet file bytes.
      */
     @GetMapping("/parquet")
-    public Mono<ResponseEntity<byte[]>> exportToParquet(@RequestParam("sensorIds") String sensorIds) {
-        log.info("Received request to export data for sensor IDs: {}", sensorIds);
+    public Mono<ResponseEntity<byte[]>> exportToParquet(
+            // RequestParam 이름을 "sensorIds" -> "parameterIndices"로 변경
+            @RequestParam("parameterIndices") String parameterIndices,
+            @RequestParam("startTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
+            @RequestParam("endTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime) {
+
+        log.info("Received request to export data for parameter indices: {} from {} to {}", parameterIndices, startTime, endTime);
 
         List<Long> idList;
         try {
-            idList = Arrays.stream(sensorIds.split(","))
+            idList = Arrays.stream(parameterIndices.split(","))
                     .map(String::trim)
                     .map(Long::parseLong)
                     .collect(Collectors.toList());
         } catch (NumberFormatException e) {
-            log.error("Invalid sensorIds parameter format: {}", sensorIds, e);
+            log.error("Invalid parameterIndices parameter format: {}", parameterIndices, e);
             return Mono.just(ResponseEntity.badRequest().build());
         }
 
@@ -57,17 +66,14 @@ public class DataExportController {
             return Mono.just(ResponseEntity.badRequest().build());
         }
 
-        // 1. Fetch data from the repository as a Flux
-        Flux<SensorData> sensorDataFlux = sensorDataRepository.findBySensorIdsAndTimeRange(idList);
+        Flux<SensorData> sensorDataFlux = sensorDataRepository.findBySensorIdsAndTimeRange(idList, startTime, endTime);
 
-        // 2. Convert the Flux to a Parquet byte array using the service
         return parquetConversionService.convertToParquet(sensorDataFlux)
                 .map(parquetBytes -> {
                     if (parquetBytes.length == 0) {
-                        // If no data was found or processed, return Not Found
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(parquetBytes);
                     }
-                    
+
                     HttpHeaders headers = new HttpHeaders();
                     headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
                     headers.setContentDispositionFormData("attachment", "sensor_data.parquet");

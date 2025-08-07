@@ -2,7 +2,6 @@ package com.samsung.ees.infra.api.service;
 
 import com.samsung.ees.infra.api.model.SensorData;
 import com.samsung.ees.infra.api.util.GzipUtil;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.avro.Schema;
@@ -19,6 +18,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -30,9 +30,7 @@ import java.nio.file.Path;
 @Slf4j
 public class ParquetConversionService {
 
-    private final ObjectMapper objectMapper;
-
-    // Avro schema definition for the Parquet file.
+    // Avro schema의 "sensorId" 필드를 "parameterIndex"로 변경합니다.
     private static final String AVRO_SCHEMA = """
             {
               "type": "record",
@@ -41,59 +39,59 @@ public class ParquetConversionService {
               "fields": [
                 {"name": "startTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
                 {"name": "endTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
-                {"name": "sensorId", "type": "long"},
+                {"name": "parameterIndex", "type": "long"},
                 {"name": "jsonData", "type": "string"}
               ]
             }
             """;
     private static final Schema SCHEMA = new Schema.Parser().parse(AVRO_SCHEMA);
 
-    /**
-     * Converts a Flux of SensorData objects into a byte array representing a Parquet file.
-     *
-     * @param sensorDataFlux The reactive stream of sensor data.
-     * @return A Mono emitting the Parquet file as a byte array. Returns an empty byte array if the input flux is empty.
-     */
     public Mono<byte[]> convertToParquet(Flux<SensorData> sensorDataFlux) {
-        // By using switchIfEmpty, we can provide a default value (empty byte array)
-        // only when the source Flux is empty. This is more efficient than hasElements().
-        return sensorDataFlux
-                .collectList()
-                .flatMap(list -> {
-                    if (list.isEmpty()) {
-                        // If the list of data is empty, return an empty byte array immediately.
-                        log.debug("Input data stream is empty. Returning empty byte array.");
-                        return Mono.just(new byte[0]);
-                    }
+        return sensorDataFlux.hasElements().flatMap(hasElements -> {
+            if (Boolean.FALSE.equals(hasElements)) {
+                log.debug("Input data stream is empty. Returning empty byte array.");
+                return Mono.just(new byte[0]);
+            }
 
-                    // If there is data, proceed with Parquet file creation.
-                    return Mono.fromCallable(() -> {
-                        Path tempFile = Files.createTempFile("parquet-export-", ".parquet");
-                        log.debug("Created temporary file for Parquet writing: {}", tempFile);
-
-                        try (ParquetWriter<GenericRecord> writer = createParquetWriter(tempFile)) {
-                            // Iterate over the collected list to write records.
-                            for (SensorData data : list) {
-                                writer.write(transformSensorData(data));
-                            }
-                        }
-
-                        byte[] parquetBytes = Files.readAllBytes(tempFile);
-                        Files.delete(tempFile);
-                        log.debug("Successfully created Parquet data and deleted temporary file.");
-                        return parquetBytes;
-
-                    }).subscribeOn(Schedulers.boundedElastic());
-                })
-                .onErrorResume(e -> {
-                    log.error("Error during Parquet conversion process", e);
-                    return Mono.error(new RuntimeException("Failed to convert data to Parquet", e));
-                });
+            return Mono.usingWhen(
+                            Mono.fromCallable(() -> Files.createTempFile("parquet-export-", ".parquet"))
+                                    .subscribeOn(Schedulers.boundedElastic()),
+                            tempFile -> Flux.usingWhen(
+                                    Mono.fromCallable(() -> createParquetWriter(tempFile)),
+                                    writer -> sensorDataFlux
+                                            .publishOn(Schedulers.boundedElastic())
+                                            .map(this::transformSensorData)
+                                            .doOnNext(record -> {
+                                                try {
+                                                    writer.write(record);
+                                                } catch (IOException e) {
+                                                    throw new UncheckedIOException(e);
+                                                }
+                                            }),
+                                    writer -> Mono.fromRunnable(() -> {
+                                        try {
+                                            writer.close();
+                                        } catch (IOException e) {
+                                            throw new UncheckedIOException(e);
+                                        }
+                                    }).subscribeOn(Schedulers.boundedElastic())
+                            ).then(Mono.fromCallable(() -> Files.readAllBytes(tempFile))
+                                    .subscribeOn(Schedulers.boundedElastic())),
+                            tempFile -> Mono.fromRunnable(() -> {
+                                try {
+                                    Files.deleteIfExists(tempFile);
+                                } catch (IOException e) {
+                                    log.error("Failed to delete temporary file: {}", tempFile, e);
+                                }
+                            }).subscribeOn(Schedulers.boundedElastic())
+                    )
+                    .onErrorResume(e -> {
+                        log.error("Error during Parquet conversion process", e);
+                        return Mono.error(new RuntimeException("Failed to convert data to Parquet", e));
+                    });
+        });
     }
 
-    /**
-     * Creates a ParquetWriter for a given temporary file path.
-     */
     private ParquetWriter<GenericRecord> createParquetWriter(Path tempFile) throws IOException {
         Configuration conf = new Configuration();
         conf.set("fs.file.impl.disable.cache", "true");
@@ -106,24 +104,25 @@ public class ParquetConversionService {
                 .build();
     }
 
-
     /**
      * Transforms a SensorData object into a GenericRecord for Parquet writing.
      */
     private GenericRecord transformSensorData(SensorData data) {
         try {
-            String decompressedJson = GzipUtil.decompress(data.getBlobData());
+            // getBlobData() -> getTraceData()
+            String decompressedJson = GzipUtil.decompress(data.getTraceData());
 
             GenericRecord record = new GenericData.Record(SCHEMA);
             record.put("startTime", java.sql.Timestamp.valueOf(data.getStartTime()).getTime());
             record.put("endTime", java.sql.Timestamp.valueOf(data.getEndTime()).getTime());
-            record.put("sensorId", data.getSensorId());
+            // getSensorId() -> getParameterIndex(), "sensorId" -> "parameterIndex"
+            record.put("parameterIndex", data.getParameterIndex());
             record.put("jsonData", decompressedJson);
 
             return record;
         } catch (IOException e) {
-            log.error("Failed to decompress or process data for sensorId {}: {}", data.getSensorId(), e.getMessage());
-            throw new RuntimeException("Data transformation failed", e);
+            log.error("Failed to decompress or process data for parameterIndex {}: {}", data.getParameterIndex(), e.getMessage());
+            throw new UncheckedIOException("Data transformation failed", e);
         }
     }
 }

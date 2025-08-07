@@ -13,6 +13,8 @@ import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.function.BiFunction;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Repository for fetching sensor data from the Oracle database using R2DBC.
@@ -24,14 +26,12 @@ public class SensorDataRepository {
 
     private final DatabaseClient databaseClient;
 
-    // Row mapping function to convert a database row to a SensorData object
+    // Row 매핑 함수를 새로운 모델과 컬럼명에 맞게 수정합니다.
     public static final BiFunction<Row, RowMetadata, SensorData> MAPPING_FUNCTION = (row, rowMetaData) -> new SensorData(
             row.get("start_time", LocalDateTime.class),
             row.get("end_time", LocalDateTime.class),
-            // Oracle returns numbers as BigDecimal, so handle potential conversion
-            Long.valueOf(row.get("sensor_id", Number.class).longValue()),
-            // The BLOB data is read into a ByteBuffer and then converted to a byte array
-            byteBufferToBytes(row.get("blob_data", ByteBuffer.class))
+            Long.valueOf(row.get("parameter_index", Number.class).longValue()),
+            byteBufferToBytes(row.get("trace_data", ByteBuffer.class))
     );
 
     private static byte[] byteBufferToBytes(ByteBuffer buffer) {
@@ -43,36 +43,38 @@ public class SensorDataRepository {
         return bytes;
     }
 
-    /**
-     * Fetches sensor data from the AAA table reactively based on sensor IDs and time range.
-     * The query fetches data from the last 7 days.
-     *
-     * @param sensorIds A list of sensor IDs to filter by.
-     * @return A Flux stream of SensorData objects.
-     */
-    public Flux<SensorData> findBySensorIdsAndTimeRange(List<Long> sensorIds) {
-        if (sensorIds == null || sensorIds.isEmpty()) {
+    // 메서드 파라미터명을 sensorIds -> parameterIndices 로 변경
+    public Flux<SensorData> findBySensorIdsAndTimeRange(List<Long> parameterIndices, LocalDateTime startTime, LocalDateTime endTime) {
+        if (parameterIndices == null || parameterIndices.isEmpty()) {
             return Flux.empty();
         }
 
-        // Dynamically create the IN clause for the sensor IDs
-        String inClause = String.join(",", sensorIds.stream().map(String::valueOf).toList());
+        String inClause = IntStream.range(0, parameterIndices.size())
+                .mapToObj(i -> ":id_" + i)
+                .collect(Collectors.joining(", "));
 
-        // The SQL query to be executed.
-        // Note: Using SYSTIMESTAMP for Oracle. Adjust if your DB timezone setup differs.
+        // SQL 쿼리의 컬럼명 변경 및 ORDER BY 절 추가
         String sql = String.format(
-                "SELECT start_time, end_time, sensor_id, blob_data " +
-                "FROM AAA " +
-                "WHERE sensor_id IN (%s) " +
-                "AND start_time > SYSTIMESTAMP - INTERVAL '7' DAY " +
-                "AND end_time < SYSTIMESTAMP",
+                "SELECT start_time, end_time, parameter_index, trace_data " +
+                        "FROM AAA " +
+                        "WHERE parameter_index IN (%s) " +
+                        "AND start_time >= :startTime " +
+                        "AND end_time <= :endTime " +
+                        "ORDER BY parameter_index, start_time ASC", // 정렬 조건 추가
                 inClause
         );
 
-        log.debug("Executing SQL query: {}", sql);
+        log.debug("Executing SQL query with bindings: {}", sql);
 
-        return databaseClient.sql(sql)
-                .map(MAPPING_FUNCTION)
-                .all();
+        DatabaseClient.GenericExecuteSpec spec = databaseClient.sql(sql);
+
+        for (int i = 0; i < parameterIndices.size(); i++) {
+            spec = spec.bind("id_" + i, parameterIndices.get(i));
+        }
+
+        spec = spec.bind("startTime", startTime);
+        spec = spec.bind("endTime", endTime);
+
+        return spec.map(MAPPING_FUNCTION).all();
     }
 }
