@@ -1,4 +1,4 @@
-package com.samsung.ees.infra.api.model;
+package com.samsung.ees.infra.api.dataprovider.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -6,15 +6,12 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-/**
- * Represents a single row from the 'AAA' table.
- */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class SensorData {
+public class ParameterData {
+    private Long paramIndex;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
-    private Long sensorId;
-    private byte[] blobData; // GZIP compressed JSON data
+    private byte[] traceData;
 }
