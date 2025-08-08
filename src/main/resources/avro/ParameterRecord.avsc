@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "ParameterRecord",
+  "namespace": "com.samsung.ees.infra.api.dataprovider",
+  "fields": [
+    {"name": "paramIndex", "type": "long"},
+    {"name": "startTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "endTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "traceData", "type": "string"}
+  ]
+}

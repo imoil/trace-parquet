@@ -23,13 +23,23 @@ import java.util.function.BiFunction;
 public class ParameterDataRepository {
     private final DatabaseClient databaseClient;
 
-    public static final BiFunction<Row, RowMetadata, ParameterData> MAPPING_FUNCTION = (row, rowMetaData) -> new ParameterData(
-            row.get("paramIndex", Long.class),
-            row.get("startTime", LocalDateTime.class),
-            row.get("endTime", LocalDateTime.class),
-            byteBufferToBytes(row.get("traceData", ByteBuffer.class))
-    );
+    /**
+     * 💡 [수정] VARBINARY 타입을 byte[]로 직접 받도록 변경
+     */
+    public static final BiFunction<Row, RowMetadata, ParameterData> MAPPING_FUNCTION = (row, rowMetaData) -> {
+        Number paramIndexNumber = row.get("paramIndex", Number.class);
+        Long paramIndex = (paramIndexNumber != null) ? paramIndexNumber.longValue() : null;
 
+        return new ParameterData(
+                paramIndex,
+                row.get("startTime", LocalDateTime.class),
+                row.get("endTime", LocalDateTime.class),
+                row.get("traceData", byte[].class) // ByteBuffer 대신 byte[]로 직접 가져옵니다.
+        );
+    };
+
+    // 💡 [수정] 더 이상 필요 없는 byteBufferToBytes 메소드 제거
+    /*
     private static byte[] byteBufferToBytes(ByteBuffer buffer) {
         if (buffer == null) {
             return new byte[0];
@@ -38,8 +48,8 @@ public class ParameterDataRepository {
         buffer.get(bytes);
         return bytes;
     }
+    */
 
-    // 💡 개선 사항: 동적 IN 절 생성을 명명된 파라미터 바인딩으로 변경하여 코드 간결화
     public Flux<ParameterData> findByIdsAndTimeRange(List<Long> ids, LocalDateTime startTime, LocalDateTime endTime) {
         if (ids == null || ids.isEmpty()) {
             return Flux.empty();

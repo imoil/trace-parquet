@@ -2,7 +2,6 @@ package com.samsung.ees.infra.api.dataprovider.service;
 
 import com.samsung.ees.infra.api.dataprovider.model.ParameterData;
 import com.samsung.ees.infra.api.dataprovider.util.GzipUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -21,32 +20,43 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 
 /**
  * Service responsible for converting a stream of SensorData into a Parquet file format.
+ * Refactored to load Avro schema from an external file.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ParquetConversionService {
-    private static final String AVRO_SCHEMA = """
-            {
-              "type": "record",
-              "name": "ParameterRecord",
-              "namespace": "com.samsung.ees.infra.api.dataprovider",
-              "fields": [
-                {"name": "paramIndex", "type": "long"},
-                {"name": "startTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
-                {"name": "endTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
-                {"name": "traceData", "type": "string"}
-              ]
-            }
-            """;
-    private static final Schema SCHEMA = new Schema.Parser().parse(AVRO_SCHEMA);
 
-    // 💡 개선 사항: 임시 파일 대신 메모리 기반 스트림을 사용하여 디스크 I/O 제거 및 성능 향상
+    private static final Schema SCHEMA;
+
+    // Load the Avro schema from the classpath resource file.
+    static {
+        try (InputStream schemaStream = ParquetConversionService.class.getResourceAsStream("/avro/ParameterRecord.avsc")) {
+            if (schemaStream == null) {
+                throw new IOException("Cannot find Avro schema file: ParameterRecord.avsc");
+            }
+            SCHEMA = new Schema.Parser().parse(schemaStream);
+            log.info("Successfully loaded Avro schema for ParameterRecord.");
+        } catch (IOException e) {
+            log.error("Failed to load Avro schema.", e);
+            throw new UncheckedIOException("Failed to initialize ParquetConversionService due to schema loading error.", e);
+        }
+    }
+
+    /**
+     * Converts a Flux of ParameterData into a Parquet file as a byte array.
+     * ⚠️ This implementation uses collectList(), which buffers all data in memory.
+     * For extremely large datasets, this may cause an OutOfMemoryError.
+     * A true streaming implementation would be more complex and might require writing to a temporary file.
+     *
+     * @param sensorDataFlux The reactive stream of data to convert.
+     * @return A Mono emitting the Parquet file as a byte array.
+     */
     public Mono<byte[]> convertToParquet(Flux<ParameterData> sensorDataFlux) {
         return sensorDataFlux.collectList().flatMap(dataList -> {
             if (dataList.isEmpty()) {
@@ -54,6 +64,7 @@ public class ParquetConversionService {
                 return Mono.just(new byte[0]);
             }
 
+            log.info("Starting Parquet conversion for {} records.", dataList.size());
             return Mono.fromCallable(() -> {
                         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                             try (ParquetWriter<GenericRecord> writer = createParquetWriter(baos)) {
@@ -61,22 +72,22 @@ public class ParquetConversionService {
                                     writer.write(transformSensorData(data));
                                 }
                             }
+                            log.info("In-memory Parquet conversion completed successfully.");
                             return baos.toByteArray();
                         } catch (IOException e) {
                             log.error("Error during in-memory Parquet conversion", e);
                             throw new UncheckedIOException(e);
                         }
                     })
-                    .subscribeOn(Schedulers.boundedElastic()) // CPU-intensive 작업을 별도 스레드에서 처리
-                    .onErrorResume(e -> {
-                        log.error("Error during Parquet conversion process", e);
-                        return Mono.error(new RuntimeException("Failed to convert data to Parquet", e));
-                    });
+                    .subscribeOn(Schedulers.boundedElastic()) // CPU-intensive work on a dedicated thread pool
+                    .onErrorMap(e -> new RuntimeException("Failed to convert data to Parquet", e));
         });
     }
 
     private ParquetWriter<GenericRecord> createParquetWriter(OutputStream outputStream) throws IOException {
         Configuration conf = new Configuration();
+        // Disable CRC checks in Hadoop client for local file system operations, can prevent some warnings.
+        conf.set("fs.file.impl.disable.cache", "true");
         return AvroParquetWriter.<GenericRecord>builder(new InMemoryOutputFile(outputStream))
                 .withSchema(SCHEMA)
                 .withConf(conf)
@@ -97,11 +108,11 @@ public class ParquetConversionService {
             return record;
         } catch (IOException e) {
             log.error("Failed to decompress or process data for paramIndex {}: {}", data.getParamIndex(), e.getMessage());
-            throw new UncheckedIOException("Data transformation failed", e);
+            throw new UncheckedIOException("Data transformation failed for paramIndex " + data.getParamIndex(), e);
         }
     }
 
-    // ParquetWriter가 OutputStream에 직접 쓸 수 있도록 도와주는 헬퍼 클래스
+    // Helper class to allow ParquetWriter to write directly to an OutputStream.
     private static class InMemoryOutputFile implements OutputFile {
         private final ByteArrayOutputStream baos;
 
@@ -110,12 +121,12 @@ public class ParquetConversionService {
         }
 
         @Override
-        public PositionOutputStream create(long blockSizeHint) throws IOException {
+        public PositionOutputStream create(long blockSizeHint) {
             return new InMemoryPositionOutputStream(baos);
         }
 
         @Override
-        public PositionOutputStream createOrOverwrite(long blockSizeHint) throws IOException {
+        public PositionOutputStream createOrOverwrite(long blockSizeHint) {
             baos.reset();
             return new InMemoryPositionOutputStream(baos);
         }
@@ -140,7 +151,7 @@ public class ParquetConversionService {
         }
 
         @Override
-        public long getPos() throws IOException {
+        public long getPos() {
             return baos.size();
         }
     }
