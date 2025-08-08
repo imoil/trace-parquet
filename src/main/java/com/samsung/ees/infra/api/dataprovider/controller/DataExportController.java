@@ -33,22 +33,19 @@ public class DataExportController {
     private final ParameterDataRepository parameterDataRepository;
     private final ParquetConversionService parquetConversionService;
 
-    /**
-     * API endpoint to fetch sensor data and return it as a Parquet file.
-     *
-     * @param parameterIndices A comma-separated string of parameter indices to query.
-     * @param startTime        The start of the time range (ISO 8601 format).
-     * @param endTime          The end of the time range (ISO 8601 format).
-     * @return A ResponseEntity containing the Parquet file bytes.
-     */
     @GetMapping("/parquet")
     public Mono<ResponseEntity<byte[]>> exportToParquet(
-            // RequestParam 이름을 "sensorIds" -> "parameterIndices"로 변경
             @RequestParam("parameterIndices") String parameterIndices,
             @RequestParam("startTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
             @RequestParam("endTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime) {
 
         log.info("Received request to export data for parameter indices: {} from {} to {}", parameterIndices, startTime, endTime);
+
+        // 💡 개선 사항: startTime이 endTime보다 늦는 경우에 대한 유효성 검사 추가
+        if (startTime.isAfter(endTime)) {
+            log.error("Invalid date range: startTime {} cannot be after endTime {}.", startTime, endTime);
+            return Mono.just(ResponseEntity.badRequest().body("Invalid date range: startTime cannot be after endTime.".getBytes()));
+        }
 
         List<Long> ids;
         try {
@@ -58,17 +55,18 @@ public class DataExportController {
                     .collect(Collectors.toList());
         } catch (NumberFormatException e) {
             log.error("Invalid parameterIndices parameter format: {}", parameterIndices, e);
-            return Mono.just(ResponseEntity.badRequest().build());
+            return Mono.just(ResponseEntity.badRequest().body("Invalid format for parameterIndices.".getBytes()));
         }
 
         if (ids.isEmpty()) {
-            return Mono.just(ResponseEntity.badRequest().build());
+            return Mono.just(ResponseEntity.badRequest().body("parameterIndices cannot be empty.".getBytes()));
         }
 
         Flux<ParameterData> sensorDataFlux = parameterDataRepository.findByIdsAndTimeRange(ids, startTime, endTime);
         return parquetConversionService.convertToParquet(sensorDataFlux)
                 .map(parquetBytes -> {
                     if (parquetBytes.length == 0) {
+                        log.warn("No data found for the given criteria. Returning 404 Not Found.");
                         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(parquetBytes);
                     }
 
@@ -82,7 +80,7 @@ public class DataExportController {
                 })
                 .doOnError(e -> log.error("An error occurred during Parquet export", e))
                 .onErrorResume(e -> Mono.just(
-                        ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()
+                        ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An internal error occurred.".getBytes())
                 ));
     }
 }

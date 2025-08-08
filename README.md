@@ -23,11 +23,11 @@
 Oracle 데이터베이스에 아래와 같은 구조의 테이블이 필요합니다.
 
 ```sql
-CREATE TABLE AAA (
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    sensor_id NUMBER,
-    blob_data BLOB
+CREATE TABLE TD_FD_TRACE_PARAM (
+    PARAM_INDEX NUMBER,
+    START_TIME TIMESTAMP,
+    END_TIME TIMESTAMP,
+    TRACE_DATA BLOB
 );
 ```
 
