@@ -88,8 +88,7 @@ java -jar target/trace-parquet-0.0.1.jar
 애플리케이션 실행 후, 아래 `curl` 명령어를 사용하여 API를 호출할 수 있습니다. `sensorIds` 파라미터로 조회할 센서 ID 목록을 전달합니다.
 
 ```bash
-curl --location 'http://localhost:8080/api/export/parquet?sensorIds=1,2,3' \
---output data.parquet
+curl --location 'http://localhost:8080/api/data/parameters/trace/parquet?sensorIds=1,2,3' --output data.parquet
 ```
 
 요청이 성공하면, 현재 디렉토리에 `data.parquet` 파일이 생성됩니다. 이 파일은 Parquet 뷰어 또는 데이터 분석 도구(예: Pandas, Spark)를 통해 내용을 확인할 수 있습니다.

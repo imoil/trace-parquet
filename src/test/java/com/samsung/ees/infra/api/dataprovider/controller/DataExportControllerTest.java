@@ -1,8 +1,8 @@
-package com.samsung.ees.infra.api.controller;
+package com.samsung.ees.infra.api.dataprovider.controller;
 
-import com.samsung.ees.infra.api.model.SensorData;
-import com.samsung.ees.infra.api.repository.SensorDataRepository;
-import com.samsung.ees.infra.api.service.ParquetConversionService;
+import com.samsung.ees.infra.api.dataprovider.model.ParameterData;
+import com.samsung.ees.infra.api.dataprovider.repository.ParameterDataRepository;
+import com.samsung.ees.infra.api.dataprovider.service.ParquetConversionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -27,7 +27,7 @@ class DataExportControllerTest {
 
     // 올바른 @MockitoBean을 사용합니다.
     @MockitoBean
-    private SensorDataRepository sensorDataRepository;
+    private ParameterDataRepository parameterDataRepository;
 
     @MockitoBean
     private ParquetConversionService parquetConversionService;
@@ -35,14 +35,14 @@ class DataExportControllerTest {
     @Test
     void exportToParquet_withValidParameters_shouldReturnOk() {
         // Arrange
-        when(sensorDataRepository.findBySensorIdsAndTimeRange(anyList(), any(LocalDateTime.class), any(LocalDateTime.class)))
-                .thenReturn(Flux.just(new SensorData(LocalDateTime.now(), LocalDateTime.now(), 1L, new byte[0])));
+        when(parameterDataRepository.findByIdsAndTimeRange(anyList(), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(Flux.just(new ParameterData(1L, LocalDateTime.now(), LocalDateTime.now(), new byte[0])));
         when(parquetConversionService.convertToParquet(any()))
                 .thenReturn(Mono.just("dummy-parquet-data".getBytes()));
 
         // Act & Assert
         webTestClient.get()
-                .uri("/api/export/parquet?parameterIndices=1,2&startTime=2023-01-01T00:00:00&endTime=2023-01-31T23:59:59")
+                .uri("/api/data/parameters/trace/parquet?parameterIndices=1,2&startTime=2023-01-01T00:00:00&endTime=2023-01-31T23:59:59")
                 .exchange()
                 .expectStatus().isOk()
                 .expectHeader().contentType(MediaType.APPLICATION_OCTET_STREAM)
@@ -52,7 +52,7 @@ class DataExportControllerTest {
     @Test
     void exportToParquet_withInvalidDate_shouldReturnBadRequest() {
         webTestClient.get()
-                .uri("/api/export/parquet?parameterIndices=1,2&startTime=invalid-date&endTime=2023-01-31T23:59:59")
+                .uri("/api/data/parameters/trace/parquet?parameterIndices=1,2&startTime=invalid-date&endTime=2023-01-31T23:59:59")
                 .exchange()
                 .expectStatus().isBadRequest();
     }
@@ -60,7 +60,7 @@ class DataExportControllerTest {
     @Test
     void exportToParquet_withMissingParameters_shouldReturnBadRequest() {
         webTestClient.get()
-                .uri("/api/export/parquet?parameterIndices=1,2&startTime=2023-01-01T00:00:00")
+                .uri("/api/data/parameters/trace/parquet?parameterIndices=1,2&startTime=2023-01-01T00:00:00")
                 .exchange()
                 .expectStatus().isBadRequest();
     }

@@ -1,7 +1,7 @@
-package com.samsung.ees.infra.api.service;
+package com.samsung.ees.infra.api.dataprovider.service;
 
-import com.samsung.ees.infra.api.model.SensorData;
-import com.samsung.ees.infra.api.util.GzipUtil;
+import com.samsung.ees.infra.api.dataprovider.model.ParameterData;
+import com.samsung.ees.infra.api.dataprovider.util.GzipUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.avro.Schema;
@@ -29,24 +29,22 @@ import java.nio.file.Path;
 @RequiredArgsConstructor
 @Slf4j
 public class ParquetConversionService {
-
-    // Avro schema의 "sensorId" 필드를 "parameterIndex"로 변경합니다.
     private static final String AVRO_SCHEMA = """
             {
               "type": "record",
-              "name": "SensorRecord",
-              "namespace": "com.samsung.ees.infra.api",
+              "name": "ParameterRecord",
+              "namespace": "com.samsung.ees.infra.api.dataprovider",
               "fields": [
+                {"name": "paramIndex", "type": "long"},
                 {"name": "startTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
                 {"name": "endTime", "type": {"type": "long", "logicalType": "timestamp-millis"}},
-                {"name": "parameterIndex", "type": "long"},
-                {"name": "jsonData", "type": "string"}
+                {"name": "traceData", "type": "string"}
               ]
             }
             """;
     private static final Schema SCHEMA = new Schema.Parser().parse(AVRO_SCHEMA);
 
-    public Mono<byte[]> convertToParquet(Flux<SensorData> sensorDataFlux) {
+    public Mono<byte[]> convertToParquet(Flux<ParameterData> sensorDataFlux) {
         return sensorDataFlux.hasElements().flatMap(hasElements -> {
             if (Boolean.FALSE.equals(hasElements)) {
                 log.debug("Input data stream is empty. Returning empty byte array.");
@@ -107,21 +105,20 @@ public class ParquetConversionService {
     /**
      * Transforms a SensorData object into a GenericRecord for Parquet writing.
      */
-    private GenericRecord transformSensorData(SensorData data) {
+    private GenericRecord transformSensorData(ParameterData data) {
         try {
             // getBlobData() -> getTraceData()
-            String decompressedJson = GzipUtil.decompress(data.getTraceData());
+            String decompressedJson = GzipUtil.gzipDecompString(data.getTraceData());
 
             GenericRecord record = new GenericData.Record(SCHEMA);
+            record.put("paramIndex", data.getParamIndex());
             record.put("startTime", java.sql.Timestamp.valueOf(data.getStartTime()).getTime());
             record.put("endTime", java.sql.Timestamp.valueOf(data.getEndTime()).getTime());
-            // getSensorId() -> getParameterIndex(), "sensorId" -> "parameterIndex"
-            record.put("parameterIndex", data.getParameterIndex());
-            record.put("jsonData", decompressedJson);
+            record.put("traceData", decompressedJson);
 
             return record;
         } catch (IOException e) {
-            log.error("Failed to decompress or process data for parameterIndex {}: {}", data.getParameterIndex(), e.getMessage());
+            log.error("Failed to decompress or process data for paramIndex {}: {}", data.getParamIndex(), e.getMessage());
             throw new UncheckedIOException("Data transformation failed", e);
         }
     }

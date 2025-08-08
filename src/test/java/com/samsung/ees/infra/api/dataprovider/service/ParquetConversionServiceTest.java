@@ -1,6 +1,6 @@
-package com.samsung.ees.infra.api.service;
+package com.samsung.ees.infra.api.dataprovider.service;
 
-import com.samsung.ees.infra.api.model.SensorData;
+import com.samsung.ees.infra.api.dataprovider.model.ParameterData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -45,9 +45,9 @@ class ParquetConversionServiceTest {
     void convertToParquet_shouldProduceValidParquetFile(@TempDir java.nio.file.Path tempDir) throws IOException {
         // 1. Arrange: 새로운 SensorData 모델에 맞게 테스트 데이터를 생성합니다.
         LocalDateTime now = LocalDateTime.now();
-        SensorData data1 = new SensorData(now, now.plusHours(1), 1L, createGzipData("{\"value\": 100, \"status\": \"OK\"}"));
-        SensorData data2 = new SensorData(now.plusMinutes(1), now.plusHours(1).plusMinutes(1), 2L, createGzipData("{\"value\": 200, \"status\": \"WARN\"}"));
-        Flux<SensorData> sensorDataFlux = Flux.just(data1, data2);
+        ParameterData data1 = new ParameterData(1L, now, now.plusHours(1), createGzipData("{\"value\": 100, \"status\": \"OK\"}"));
+        ParameterData data2 = new ParameterData(2L, now.plusMinutes(1), now.plusHours(1).plusMinutes(1), createGzipData("{\"value\": 200, \"status\": \"WARN\"}"));
+        Flux<ParameterData> sensorDataFlux = Flux.just(data1, data2);
 
         // 2. Act
         StepVerifier.create(parquetConversionService.convertToParquet(sensorDataFlux))
@@ -66,14 +66,13 @@ class ParquetConversionServiceTest {
                         List<GenericRecord> records = readParquetFile(tempParquetFile);
                         assertEquals(2, records.size());
 
-                        // 검증: "sensorId" -> "parameterIndex" 로 필드명 확인
                         GenericRecord record1 = records.get(0);
-                        assertEquals(1L, record1.get("parameterIndex"));
-                        assertEquals("{\"value\": 100, \"status\": \"OK\"}", record1.get("jsonData").toString());
+                        assertEquals(1L, record1.get("paramIndex"));
+                        assertEquals("{\"value\": 100, \"status\": \"OK\"}", record1.get("traceData").toString());
 
                         GenericRecord record2 = records.get(1);
-                        assertEquals(2L, record2.get("parameterIndex"));
-                        assertEquals("{\"value\": 200, \"status\": \"WARN\"}", record2.get("jsonData").toString());
+                        assertEquals(2L, record2.get("paramIndex"));
+                        assertEquals("{\"value\": 200, \"status\": \"WARN\"}", record2.get("traceData").toString());
 
                     } catch (IOException e) {
                         fail("Test failed due to IOException during Parquet verification", e);
@@ -84,7 +83,7 @@ class ParquetConversionServiceTest {
 
     @Test
     void convertToParquet_withEmptyFlux_shouldProduceEmptyBytes() {
-        Flux<SensorData> emptyFlux = Flux.empty();
+        Flux<ParameterData> emptyFlux = Flux.empty();
 
         StepVerifier.create(parquetConversionService.convertToParquet(emptyFlux))
                 .assertNext(parquetBytes -> {
