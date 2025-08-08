@@ -13,8 +13,6 @@ import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /**
  * Repository for fetching sensor data from the Oracle database using R2DBC.
@@ -25,7 +23,6 @@ import java.util.stream.IntStream;
 public class ParameterDataRepository {
     private final DatabaseClient databaseClient;
 
-    // Row 매핑 함수를 새로운 모델과 컬럼명에 맞게 수정합니다.
     public static final BiFunction<Row, RowMetadata, ParameterData> MAPPING_FUNCTION = (row, rowMetaData) -> new ParameterData(
             row.get("paramIndex", Long.class),
             row.get("startTime", LocalDateTime.class),
@@ -42,36 +39,31 @@ public class ParameterDataRepository {
         return bytes;
     }
 
-    // 메서드 파라미터명을 sensorIds -> ids 로 변경
+    // 💡 개선 사항: 동적 IN 절 생성을 명명된 파라미터 바인딩으로 변경하여 코드 간결화
     public Flux<ParameterData> findByIdsAndTimeRange(List<Long> ids, LocalDateTime startTime, LocalDateTime endTime) {
         if (ids == null || ids.isEmpty()) {
             return Flux.empty();
         }
-        String inClause = IntStream.range(0, ids.size())
-                .mapToObj(i -> ":id_" + i)
-                .collect(Collectors.joining(", "));
-        String sql = String.format("""
-                SELECT
-                       dparam.PARAM_INDEX as paramIndex,
-                       dparam.START_TIME as startTime,
-                       dparam.END_TIME as endTime,
-                       dparam.TRACE_DATA as traceData
-                  FROM TD_FD_TRACE_PARAM dparam
-                 WHERE dparam.PARAM_INDEX IN (%s)
-                   AND START_TIME >= :startTime
-                   AND START_TIME <= :endTime
-                 ORDER BY PARAM_INDEX, START_TIME ASC
-                """, inClause
-        );
-        log.debug("Executing SQL query with bindings: {}", sql);
 
-        DatabaseClient.GenericExecuteSpec spec = databaseClient.sql(sql);
-        for (int i = 0; i < ids.size(); i++) {
-            spec = spec.bind("id_" + i, ids.get(i));
-        }
-        spec = spec.bind("startTime", startTime);
-        spec = spec.bind("endTime", endTime);
+        String sql = """
+            SELECT
+                   dparam.PARAM_INDEX as paramIndex,
+                   dparam.START_TIME as startTime,
+                   dparam.END_TIME as endTime,
+                   dparam.TRACE_DATA as traceData
+              FROM TD_FD_TRACE_PARAM dparam
+             WHERE dparam.PARAM_INDEX IN (:ids)
+               AND dparam.START_TIME >= :startTime
+               AND dparam.START_TIME <= :endTime
+             ORDER BY dparam.PARAM_INDEX, dparam.START_TIME ASC
+            """;
+        log.debug("Executing SQL query: {}", sql);
 
-        return spec.map(MAPPING_FUNCTION).all();
+        return databaseClient.sql(sql)
+                .bind("ids", ids)
+                .bind("startTime", startTime)
+                .bind("endTime", endTime)
+                .map(MAPPING_FUNCTION)
+                .all();
     }
 }
